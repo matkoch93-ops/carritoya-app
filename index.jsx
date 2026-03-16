@@ -302,34 +302,53 @@ export default function CarritoYa() {
   }, [busqueda]);
 
   // Agente de IA
+  // URLs de búsqueda por supermercado
+  const getURLBusqueda = (cadena, nombreProducto) => {
+    const q = encodeURIComponent(nombreProducto.split(" ").slice(0, 4).join(" "));
+    const urls = {
+      "Carrefour": `https://www.carrefour.com.ar/${q}?_q=${q}&map=ft`,
+      "Coto":      `https://www.cotodigital3.com.ar/sitios/cdigi/browse?_dyncharset=utf-8&Dy=1&Nrpp=48&No=0&Nr=AND%28locale%3Aes_AR%2Conline%3Atrue%29&Ntt=${q}`,
+      "Jumbo":     `https://www.jumbo.com.ar/${q}?_q=${q}&map=ft`,
+      "Dia":       `https://diaonline.supermercadosdia.com.ar/${q}?_q=${q}&map=ft`,
+      "Disco":     `https://www.disco.com.ar/${q}?_q=${q}&map=ft`,
+      "La Anonima":`https://www.laanonima.com.ar/busca/?ft=${q}`,
+    };
+    const key = Object.keys(urls).find(k => cadena?.toLowerCase().includes(k.toLowerCase()));
+    return key ? urls[key] : `https://www.google.com/search?q=${q}+${encodeURIComponent(cadena)}+precio+argentina`;
+  };
+
   const consultarAgenteIA = async () => {
     if (carrito.length === 0 || !comparacion) return;
     setLoadingIA(true);
     setAgenteIA(null);
     try {
+      const ganador = comparacion.ranking[0];
+      const peor = comparacion.ranking[comparacion.ranking.length - 1];
       const resumen = comparacion.ranking.map(s =>
-        `${s.cadena}: $${s.total.toLocaleString("es-AR")}${s.promos?.length ? " (con promos: " + s.promos.map(p => p.descripcion).join(", ") + ")" : ""}`
+        `${s.cadena}: $${s.total.toLocaleString("es-AR")}${s.promos?.length ? " (promos: " + s.promos.map(p => p.descripcion).join(", ") + ")" : ""}`
       ).join("\n");
       const productos = carrito.map(p => `- ${p.nombre} x${p.cantidad || 1}`).join("\n");
-      const detalles = comparacion.detalles.map(d =>
-        `${d.producto}: ${d.precios.slice(0,4).map(p => `${p.cadena} $${p.precioFinal?.toLocaleString("es-AR")}`).join(", ")}`
-      ).join("\n");
+      const detalles = comparacion.detalles.map(d => {
+        const precios = d.precios.slice(0, 4).map(p => `${p.cadena} $${p.precioFinal?.toLocaleString("es-AR")}`).join(", ");
+        return `${d.producto}: ${precios}`;
+      }).join("\n");
 
       const prompt = `Sos un experto en ahorro en supermercados argentinos. Un usuario armó este carrito:
 ${productos}
 
-Estos son los precios totales por supermercado:
+Precios totales por supermercado:
 ${resumen}
 
-Detalle de precios por producto:
+Detalle por producto:
 ${detalles}
 
-Analizá la situación y respondé en español argentino de forma clara y amigable:
-1. ¿Cuál es la mejor opción para comprar TODO en un solo supermercado?
-2. ¿Conviene dividir el carrito entre dos supermercados? Si es así, ¿cuáles productos en cuál super?
-3. ¿Cuánto ahorra el usuario con la mejor estrategia vs la peor opción?
-4. Un consejo práctico final.
-Sé concreto, usá números reales y emojis para que sea fácil de leer. Máximo 200 palabras.`;
+Respondé en español argentino, de forma clara, amigable y con emojis. Incluí:
+1. Recomendación principal: un solo super o dividir entre dos
+2. Si conviene dividir: decí exactamente qué productos comprar en cada super
+3. El ahorro total con tu estrategia vs la opción más cara
+4. Un consejo práctico corto
+
+Sé muy concreto con los números. Máximo 180 palabras.`;
 
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -342,9 +361,18 @@ Sé concreto, usá números reales y emojis para que sea fácil de leer. Máximo
       });
       const data = await response.json();
       const texto = data.content?.find(b => b.type === "text")?.text;
-      setAgenteIA(texto || "No pude generar el análisis.");
+
+      // Armar links de compra para el supermercado ganador
+      const linksCompra = carrito.map(prod => ({
+        nombre: prod.nombre,
+        cantidad: prod.cantidad || 1,
+        url: getURLBusqueda(ganador?.cadena, prod.nombre),
+        cadena: ganador?.cadena,
+      }));
+
+      setAgenteIA({ texto: texto || "No pude generar el análisis.", links: linksCompra, ganador });
     } catch (e) {
-      setAgenteIA("Hubo un error al consultar el agente. Intentá de nuevo.");
+      setAgenteIA({ texto: "Hubo un error al consultar el agente. Intentá de nuevo.", links: [], ganador: null });
     }
     setLoadingIA(false);
   };
@@ -954,7 +982,7 @@ Sé concreto, usá números reales y emojis para que sea fácil de leer. Máximo
                       {!agenteIA && !loadingIA && (
                         <div>
                           <p style={{ fontSize: 13, color: "rgba(255,255,255,0.45)", marginBottom: 12, lineHeight: 1.5 }}>
-                            El agente analiza tu carrito y te dice exactamente dónde conviene comprar cada producto para ahorrar el máximo.
+                            El agente analiza tu carrito, te dice dónde conviene comprar y te genera los links directos a cada producto en el supermercado elegido.
                           </p>
                           <button onClick={consultarAgenteIA} style={{
                             width: "100%", padding: "12px", borderRadius: 10, border: "none",
@@ -971,9 +999,45 @@ Sé concreto, usá números reales y emojis para que sea fácil de leer. Máximo
                       )}
                       {agenteIA && (
                         <div>
-                          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{agenteIA}</div>
+                          {/* Análisis de texto */}
+                          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", lineHeight: 1.75, whiteSpace: "pre-wrap", marginBottom: 16 }}>{agenteIA.texto}</div>
+
+                          {/* Links de compra */}
+                          {agenteIA.links?.length > 0 && (
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", letterSpacing: 1, marginBottom: 10 }}>
+                                🛍️ IR A COMPRAR EN {agenteIA.ganador?.cadena?.toUpperCase()}
+                              </div>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                                {agenteIA.links.map((link, i) => (
+                                  <a key={i} href={link.url} target="_blank" rel="noopener noreferrer" style={{
+                                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                                    padding: "10px 13px", borderRadius: 10, textDecoration: "none",
+                                    background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.25)",
+                                    transition: "all 0.15s",
+                                  }}>
+                                    <div style={{ minWidth: 0 }}>
+                                      <div style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {link.nombre.length > 35 ? link.nombre.slice(0, 35) + "…" : link.nombre}
+                                      </div>
+                                      {link.cantidad > 1 && (
+                                        <div style={{ fontSize: 10, color: "#a78bfa", marginTop: 2 }}>×{link.cantidad} unidades</div>
+                                      )}
+                                    </div>
+                                    <span style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", whiteSpace: "nowrap", marginLeft: 10, flexShrink: 0 }}>
+                                      Buscar →
+                                    </span>
+                                  </a>
+                                ))}
+                              </div>
+                              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginTop: 10, lineHeight: 1.5 }}>
+                                💡 Cada link abre la búsqueda del producto en el sitio de {agenteIA.ganador?.cadena}. Hacé clic en "Agregar al carrito" en cada uno.
+                              </div>
+                            </div>
+                          )}
+
                           <button onClick={() => { setAgenteIA(null); consultarAgenteIA(); }} style={{
-                            marginTop: 12, padding: "8px 16px", borderRadius: 8, border: "1px solid rgba(139,92,246,0.3)",
+                            marginTop: 14, padding: "8px 16px", borderRadius: 8, border: "1px solid rgba(139,92,246,0.3)",
                             background: "transparent", color: "#a78bfa", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
                           }}>🔄 Volver a analizar</button>
                         </div>
