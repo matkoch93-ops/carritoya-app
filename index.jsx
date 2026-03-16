@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 const TARJETAS_PREDEFINIDAS = [
   { id: "visa", nombre: "Visa", tipo: "credito", color: "#1a1f71", emoji: "💳" },
@@ -225,6 +225,9 @@ export default function CarritoYa() {
   const [toast, setToast] = useState(null);
   const [filtroTipo, setFiltroTipo] = useState("todas");
   const [vistaComparacion, setVistaComparacion] = useState("ranking");
+  const [agenteIA, setAgenteIA] = useState(null);
+  const [loadingIA, setLoadingIA] = useState(false);
+  const debounceRef = useRef(null);
 
   useEffect(() => { saveLS("carritoYa_carrito", carrito); }, [carrito]);
   useEffect(() => { saveLS("carritoYa_tarjetas", tarjetas); }, [tarjetas]);
@@ -286,6 +289,64 @@ export default function CarritoYa() {
       setModoDemo(true);
     }
     setLoading(false);
+  };
+
+  // Búsqueda en tiempo real con debounce de 400ms
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!busqueda || busqueda.length < 2) { setResultados([]); return; }
+    debounceRef.current = setTimeout(() => {
+      buscarProductos(busqueda);
+    }, 400);
+    return () => clearTimeout(debounceRef.current);
+  }, [busqueda]);
+
+  // Agente de IA
+  const consultarAgenteIA = async () => {
+    if (carrito.length === 0 || !comparacion) return;
+    setLoadingIA(true);
+    setAgenteIA(null);
+    try {
+      const resumen = comparacion.ranking.map(s =>
+        `${s.cadena}: $${s.total.toLocaleString("es-AR")}${s.promos?.length ? " (con promos: " + s.promos.map(p => p.descripcion).join(", ") + ")" : ""}`
+      ).join("\n");
+      const productos = carrito.map(p => `- ${p.nombre} x${p.cantidad || 1}`).join("\n");
+      const detalles = comparacion.detalles.map(d =>
+        `${d.producto}: ${d.precios.slice(0,4).map(p => `${p.cadena} $${p.precioFinal?.toLocaleString("es-AR")}`).join(", ")}`
+      ).join("\n");
+
+      const prompt = `Sos un experto en ahorro en supermercados argentinos. Un usuario armó este carrito:
+${productos}
+
+Estos son los precios totales por supermercado:
+${resumen}
+
+Detalle de precios por producto:
+${detalles}
+
+Analizá la situación y respondé en español argentino de forma clara y amigable:
+1. ¿Cuál es la mejor opción para comprar TODO en un solo supermercado?
+2. ¿Conviene dividir el carrito entre dos supermercados? Si es así, ¿cuáles productos en cuál super?
+3. ¿Cuánto ahorra el usuario con la mejor estrategia vs la peor opción?
+4. Un consejo práctico final.
+Sé concreto, usá números reales y emojis para que sea fácil de leer. Máximo 200 palabras.`;
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }]
+        })
+      });
+      const data = await response.json();
+      const texto = data.content?.find(b => b.type === "text")?.text;
+      setAgenteIA(texto || "No pude generar el análisis.");
+    } catch (e) {
+      setAgenteIA("Hubo un error al consultar el agente. Intentá de nuevo.");
+    }
+    setLoadingIA(false);
   };
 
   const toggleCarrito = (prod) => {
@@ -469,25 +530,32 @@ export default function CarritoYa() {
         {/* BUSCAR */}
         {screen === "buscar" && (
           <div className="fade-up">
-            <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+            <div style={{ position: "relative", marginBottom: 18 }}>
               <input
-                placeholder="Buscá productos: leche, arroz, yerba…"
+                placeholder="Escribí un producto para buscar…"
                 value={busqueda}
                 onChange={e => setBusqueda(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && buscarProductos(busqueda)}
                 autoFocus
+                style={{ paddingRight: 44 }}
               />
-              <button onClick={() => buscarProductos(busqueda)} style={{
-                padding: "12px 18px", borderRadius: 10, border: "none",
-                background: "linear-gradient(135deg,#4ade80,#22c55e)", color: "#0d1117",
-                fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
-              }}>{loading ? "…" : "Buscar"}</button>
+              {loading && (
+                <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", fontSize: 16, animation: "spin 0.7s linear infinite" }}>⚡</div>
+              )}
+              {!loading && busqueda.length > 0 && (
+                <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", fontSize: 14, color: "rgba(255,255,255,0.2)" }}>🔍</div>
+              )}
             </div>
 
-            {resultados.length === 0 && !loading && (
+            {resultados.length === 0 && !loading && busqueda.length < 2 && (
               <div style={{ textAlign: "center", paddingTop: 32, color: "rgba(255,255,255,0.2)", fontSize: 14 }}>
                 <div style={{ fontSize: 40, marginBottom: 10 }}>🔍</div>
-                Escribí un producto y presioná buscar
+                Escribí al menos 2 letras para buscar
+              </div>
+            )}
+            {resultados.length === 0 && !loading && busqueda.length >= 2 && (
+              <div style={{ textAlign: "center", paddingTop: 32, color: "rgba(255,255,255,0.2)", fontSize: 14 }}>
+                <div style={{ fontSize: 40, marginBottom: 10 }}>😕</div>
+                No encontramos "{busqueda}"
               </div>
             )}
 
@@ -880,13 +948,45 @@ export default function CarritoYa() {
                     })()}
 
 
+                    {/* AGENTE DE IA */}
+                    <div style={{ marginBottom: 16, padding: "16px", borderRadius: 14, background: "rgba(139,92,246,0.07)", border: "1px solid rgba(139,92,246,0.25)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", letterSpacing: 1, marginBottom: 10 }}>🤖 AGENTE DE IA — ESTRATEGIA DE COMPRA</div>
+                      {!agenteIA && !loadingIA && (
+                        <div>
+                          <p style={{ fontSize: 13, color: "rgba(255,255,255,0.45)", marginBottom: 12, lineHeight: 1.5 }}>
+                            El agente analiza tu carrito y te dice exactamente dónde conviene comprar cada producto para ahorrar el máximo.
+                          </p>
+                          <button onClick={consultarAgenteIA} style={{
+                            width: "100%", padding: "12px", borderRadius: 10, border: "none",
+                            background: "linear-gradient(135deg,#8b5cf6,#7c3aed)", color: "#fff",
+                            fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                          }}>✨ Analizar mi carrito con IA</button>
+                        </div>
+                      )}
+                      {loadingIA && (
+                        <div style={{ textAlign: "center", padding: "16px 0" }}>
+                          <div style={{ fontSize: 28, marginBottom: 8, display: "inline-block", animation: "spin 0.8s linear infinite" }}>🤖</div>
+                          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>Analizando tu carrito…</div>
+                        </div>
+                      )}
+                      {agenteIA && (
+                        <div>
+                          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{agenteIA}</div>
+                          <button onClick={() => { setAgenteIA(null); consultarAgenteIA(); }} style={{
+                            marginTop: 12, padding: "8px 16px", borderRadius: 8, border: "1px solid rgba(139,92,246,0.3)",
+                            background: "transparent", color: "#a78bfa", cursor: "pointer", fontFamily: "inherit", fontSize: 12,
+                          }}>🔄 Volver a analizar</button>
+                        </div>
+                      )}
+                    </div>
+
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={() => setScreen("carrito")} style={{
                         flex: 1, padding: "12px", borderRadius: 10,
                         border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)",
                         color: "rgba(255,255,255,0.55)", cursor: "pointer", fontFamily: "inherit", fontSize: 13,
                       }}>← Editar carrito</button>
-                      <button onClick={() => { setCarrito([]); setBusqueda(""); setResultados([]); setComparacion(null); setScreen("buscar"); }} style={{
+                      <button onClick={() => { setCarrito([]); setBusqueda(""); setResultados([]); setComparacion(null); setAgenteIA(null); setScreen("buscar"); }} style={{
                         flex: 1, padding: "12px", borderRadius: 10, border: "none",
                         background: "linear-gradient(135deg,#4ade80,#22c55e)", color: "#0d1117",
                         cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
