@@ -350,14 +350,10 @@ Respondé en español argentino, de forma clara, amigable y con emojis. Incluí:
 
 Sé muy concreto con los números. Máximo 180 palabras.`;
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch(`${PROXY_URL}?action=ia`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }]
-        })
+        body: JSON.stringify({ prompt })
       });
       const data = await response.json();
       const texto = data.content?.find(b => b.type === "text")?.text;
