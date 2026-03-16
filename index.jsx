@@ -228,6 +228,8 @@ export default function CarritoYa() {
   const [agenteIA, setAgenteIA] = useState(null);
   const [loadingIA, setLoadingIA] = useState(false);
   const debounceRef = useRef(null);
+  const [direccion, setDireccion] = useState("");
+  const [mostrarDireccion, setMostrarDireccion] = useState(false);
 
   useEffect(() => { saveLS("carritoYa_carrito", carrito); }, [carrito]);
   useEffect(() => { saveLS("carritoYa_tarjetas", tarjetas); }, [tarjetas]);
@@ -241,15 +243,77 @@ export default function CarritoYa() {
 
   const obtenerUbicacion = () => {
     setLoading(true); setErrorUbi("");
-    if (!navigator.geolocation) { setErrorUbi("Tu navegador no soporta geolocalización."); setLoading(false); return; }
+    if (!navigator.geolocation) {
+      setErrorUbi("Tu navegador no soporta geolocalización.");
+      setLoading(false);
+      setMostrarDireccion(true);
+      return;
+    }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setUbicacion({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         setUbicacionTexto("Mi ubicación actual");
-        setLoading(false); setScreen("buscar");
+        setModoDemo(false);
+        setLoading(false);
+        setScreen("buscar");
       },
-      () => { setErrorUbi("No pudimos obtener tu ubicación. Usá el modo demo o ingresá coordenadas."); setLoading(false); }
+      (err) => {
+        let msg = "No pudimos obtener tu ubicación automáticamente.";
+        if (err.code === 1) msg = "Bloqueaste el permiso de ubicación. Ingresá tu dirección manualmente.";
+        if (err.code === 2) msg = "No se pudo detectar tu ubicación. Ingresá tu dirección manualmente.";
+        setErrorUbi(msg);
+        setMostrarDireccion(true);
+        setLoading(false);
+      },
+      { timeout: 10000, enableHighAccuracy: false }
     );
+  };
+
+  const buscarPorDireccion = async () => {
+    if (!direccion.trim()) return;
+    setLoading(true); setErrorUbi("");
+    try {
+      const url = `https://apis.datos.gob.ar/georef/api/direcciones?direccion=${encodeURIComponent(direccion)}&provincia=Buenos Aires&max=1`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const result = data?.direcciones?.[0];
+      if (result?.ubicacion) {
+        setUbicacion({ lat: result.ubicacion.lat, lng: result.ubicacion.lon });
+        setUbicacionTexto(direccion);
+        setModoDemo(false);
+        setScreen("buscar");
+      } else {
+        // Fallback: geocodificación simple por nombre de barrio conocido
+        const barrios = {
+          "palermo": { lat: -34.5844, lng: -58.4332 },
+          "belgrano": { lat: -34.5614, lng: -58.4574 },
+          "recoleta": { lat: -34.5875, lng: -58.3938 },
+          "caballito": { lat: -34.6185, lng: -58.4426 },
+          "flores": { lat: -34.6283, lng: -58.4629 },
+          "villa urquiza": { lat: -34.5724, lng: -58.4887 },
+          "san telmo": { lat: -34.6218, lng: -58.3709 },
+          "almagro": { lat: -34.6079, lng: -58.4196 },
+          "balvanera": { lat: -34.6133, lng: -58.3996 },
+          "boedo": { lat: -34.6307, lng: -58.4196 },
+          "villa crespo": { lat: -34.5979, lng: -58.4427 },
+          "nunez": { lat: -34.5449, lng: -58.4617 },
+          "coghlan": { lat: -34.5568, lng: -58.4837 },
+          "saavedra": { lat: -34.5558, lng: -58.4887 },
+        };
+        const barrio = Object.keys(barrios).find(b => direccion.toLowerCase().includes(b));
+        if (barrio) {
+          setUbicacion(barrios[barrio]);
+          setUbicacionTexto(direccion);
+          setModoDemo(false);
+          setScreen("buscar");
+        } else {
+          setErrorUbi("No encontramos esa dirección. Probá con el nombre del barrio (ej: Palermo, Belgrano, Caballito).");
+        }
+      }
+    } catch {
+      setErrorUbi("Error al buscar la dirección. Probá con el nombre del barrio.");
+    }
+    setLoading(false);
   };
 
   const usarDemo = () => {
@@ -529,20 +593,48 @@ Sé muy concreto con los números. Máximo 180 palabras.`;
             <p style={{ color: "rgba(255,255,255,0.42)", fontSize: 15, lineHeight: 1.75, marginBottom: 36 }}>
               Comparamos precios en tiempo real en Carrefour, Coto,<br />Jumbo, Día, Disco, La Anónima y más.<br />Con tus descuentos de tarjetas incluidos.
             </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 290, margin: "0 auto 32px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 320, margin: "0 auto 24px" }}>
               <button onClick={obtenerUbicacion} disabled={loading} style={{
                 padding: "15px", borderRadius: 12, border: "none",
                 background: loading ? "rgba(74,222,128,0.35)" : "linear-gradient(135deg,#4ade80,#22c55e)",
                 color: "#0d1117", fontSize: 15, fontWeight: 700, cursor: loading ? "default" : "pointer", fontFamily: "inherit",
               }}>
-                {loading ? "Obteniendo ubicación…" : "📍 Usar mi ubicación"}
+                {loading ? "Obteniendo ubicación…" : "📍 Detectar mi ubicación"}
               </button>
+
+              {(mostrarDireccion || errorUbi) && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", textAlign: "center" }}>— o ingresá tu dirección —</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      placeholder="Ej: Palermo, Belgrano, Av. Corrientes 1234…"
+                      value={direccion}
+                      onChange={e => setDireccion(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && buscarPorDireccion()}
+                      style={{ fontSize: 13 }}
+                    />
+                    <button onClick={buscarPorDireccion} disabled={loading} style={{
+                      padding: "12px 16px", borderRadius: 10, border: "none",
+                      background: "rgba(74,222,128,0.2)", color: "#4ade80",
+                      cursor: "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap",
+                    }}>Ir →</button>
+                  </div>
+                </div>
+              )}
+
+              {!mostrarDireccion && !errorUbi && (
+                <button onClick={() => setMostrarDireccion(true)} style={{
+                  padding: "11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)",
+                  background: "transparent", color: "rgba(255,255,255,0.45)", fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                }}>✍️ Ingresar dirección manualmente</button>
+              )}
+
               <button onClick={usarDemo} style={{
-                padding: "13px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)",
-                background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.6)", fontSize: 14, cursor: "pointer", fontFamily: "inherit",
+                padding: "11px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)",
+                background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.4)", fontSize: 13, cursor: "pointer", fontFamily: "inherit",
               }}>🎮 Probar con datos de ejemplo</button>
             </div>
-            {errorUbi && <div style={{ color: "#f87171", fontSize: 13, maxWidth: 320, margin: "0 auto" }}>{errorUbi}</div>}
+            {errorUbi && <div style={{ color: "#f87171", fontSize: 12, maxWidth: 320, margin: "-12px auto 12px", lineHeight: 1.5 }}>{errorUbi}</div>}
             <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
               {["Precios reales vía Precios Claros", "Descuentos por tarjeta", "Sin registro necesario"].map((f, i) => (
                 <span key={i} style={{ padding: "6px 12px", borderRadius: 20, background: "rgba(74,222,128,0.07)", border: "1px solid rgba(74,222,128,0.15)", fontSize: 11, color: "#4ade80" }}>✓ {f}</span>
